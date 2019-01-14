@@ -35,24 +35,30 @@
    ;; clashes -- index these as needed in riemann config
    data
    {:host hostname
-    :service type
+    :service (str "activitywatch " type)
     :metric duration
     :time (/ (c/to-long (parse-aw-timestamp timestamp)) 1000)
     :ttl (* 60 60 24 1000)}))
 
-(defn send-all []
+(defn send-events [bucket-filter]
   (with-open [rc (riemann/tcp-client {:host (env :riemann-host "localhost")})]
-    (doseq [bucket-id (->> (buckets) (map :id))]
+    (doseq [bucket-id (->> (buckets) (map :id))
+            :when (bucket-filter bucket-id)]
       (println "importing" bucket-id)
       (let [response (:body (export-bucket bucket-id))
             header (dissoc response :events)
-            events (:events response)]
+            events (map (partial aw-event->riemann header) (:events response))
+            ;; TODO: push the sort upstream
+            events (sort-by :time events)]
         (doseq [event events]
-          (riemann/send-event rc (aw-event->riemann header event)))
+          (riemann/send-event rc event))
         (println "sent" (count events) "events")))))
 
 (defn -main [& args]
   (let [c (select-keys env [:api-url :riemann-host])]
     (when (seq c)
       (println "Using configuration" c)))
-  (send-all))
+  (send-events
+   (if (empty? args)
+     identity
+     (into #{} args))))
