@@ -49,10 +49,22 @@
             header (dissoc response :events)
             events (map (partial aw-event->riemann header) (:events response))
             ;; TODO: push the sort upstream
-            events (sort-by :time events)]
-        (doseq [event events]
-          (riemann/send-event rc event))
-        (println "sent" (count events) "events")))))
+            events (sort-by :time events)
+            many? (> (count events) 300)]
+        (doseq [batch (partition-all 100 events)]
+          (let [batch-results
+                (->> batch
+                     (map #(riemann/send-event rc %))
+                     doall
+                     (map #(deref % 2000 {:ok false})))]
+            (when-not (every? :ok batch-results)
+              (throw (Exception. "Error sending batch."))))
+          ;; indicate progress
+          (when many?
+            (print ".")
+            (flush)))
+        (when many? (println))
+        (println "Successfully sent" (count events) "events")))))
 
 (defn -main [& args]
   (let [c (select-keys env [:api-url :riemann-host])]
